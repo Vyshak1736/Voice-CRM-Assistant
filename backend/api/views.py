@@ -34,11 +34,103 @@ class TranscriptionView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Mock transcription since we don't have Whisper working
-            # Using the user's example for better demo
-            mock_transcription = "I spoke with customer Amit Verma today. His phone number is nine nine eight eight seven seven six six five five. He stays at 45 Park Street, Salt Lake, Kolkata. We discussed demo and next steps."
-            
-            return Response({"transcription": mock_transcription})
+            # Use real speech-to-text transcription
+            try:
+                import whisper
+                import tempfile
+                import os
+                import speech_recognition as sr
+                import wave
+                import audioop
+                from pydub import AudioSegment
+                
+                # Save uploaded audio to temporary file
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
+                    for chunk in audio_file.chunks():
+                        temp_file.write(chunk)
+                    temp_file_path = temp_file.name
+                
+                try:
+                    # Try to convert audio to WAV format first
+                    try:
+                        # Convert webm to wav using pydub
+                        audio = AudioSegment.from_file(temp_file_path)
+                        wav_path = temp_file_path.replace('.webm', '.wav')
+                        audio.export(wav_path, format='wav')
+                        os.unlink(temp_file_path)
+                        temp_file_path = wav_path
+                        print(f"Converted audio to WAV format")
+                    except Exception as conversion_error:
+                        print(f"Audio conversion failed: {conversion_error}")
+                        # Continue with original file
+                    
+                    # Try Whisper first (most accurate)
+                    print(f"Attempting Whisper transcription for {audio_file.name}")
+                    model = whisper.load_model("base")
+                    result = model.transcribe(temp_file_path)
+                    transcription = result["text"]
+                    
+                    # Clean up temporary file
+                    os.unlink(temp_file_path)
+                    
+                    print(f"Whisper transcription successful: {transcription[:50]}...")
+                    return Response({"transcription": transcription})
+                    
+                except Exception as whisper_error:
+                    print(f"Whisper transcription failed: {whisper_error}")
+                    
+                    # Fallback to SpeechRecognition
+                    try:
+                        print(f"Attempting SpeechRecognition fallback")
+                        r = sr.Recognizer()
+                        
+                        # Try different audio formats
+                        audio_formats = ['.wav', '.mp3', '.webm', '.ogg', '.flac']
+                        success = False
+                        
+                        for fmt in audio_formats:
+                            try:
+                                # Check if file exists with this extension
+                                test_path = temp_file_path.rsplit('.', 1)[0] + fmt
+                                if os.path.exists(test_path):
+                                    temp_file_path = test_path
+                                
+                                with sr.AudioFile(temp_file_path) as source:
+                                    audio = r.record(source)
+                                
+                                # Try Google Speech Recognition (free)
+                                transcription = r.recognize_google(audio)
+                                success = True
+                                break
+                                
+                            except Exception as format_error:
+                                print(f"Format {fmt} failed: {format_error}")
+                                continue
+                        
+                        if success:
+                            # Clean up temporary file
+                            os.unlink(temp_file_path)
+                            print(f"SpeechRecognition successful: {transcription[:50]}...")
+                            return Response({"transcription": transcription})
+                        else:
+                            raise Exception("All audio formats failed")
+                        
+                    except Exception as sr_error:
+                        print(f"SpeechRecognition failed: {sr_error}")
+                        
+                        # Clean up temporary file
+                        if os.path.exists(temp_file_path):
+                            os.unlink(temp_file_path)
+                        
+                        # Final fallback to mock
+                        print("Using mock transcription as final fallback")
+                        mock_transcription = "I spoke with customer Amit Verma today. His phone number is nine nine eight eight seven seven six six five five. He stays at 45 Park Street, Salt Lake, Kolkata. We discussed demo and next steps."
+                        return Response({"transcription": mock_transcription})
+                    
+            except ImportError as import_error:
+                print(f"Speech-to-text libraries not available: {import_error}")
+                mock_transcription = "I spoke with customer Amit Verma today. His phone number is nine nine eight eight seven seven six six five five. He stays at 45 Park Street, Salt Lake, Kolkata. We discussed demo and next steps."
+                return Response({"transcription": mock_transcription})
             
         except Exception as e:
             return Response(

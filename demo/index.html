@@ -334,7 +334,7 @@
                 const formData = new FormData();
                 formData.append('audio', audioBlob, 'recording.wav');
 
-                const response = await fetch(`${API_BASE}/api/transcribe`, {
+                const response = await fetch(`${API_BASE}/api/transcribe/`, {
                     method: 'POST',
                     body: formData,
                 });
@@ -363,7 +363,7 @@
             try {
                 document.getElementById('loading-section').classList.remove('hidden');
                 
-                const response = await fetch(`${API_BASE}/api/extract`, {
+                const response = await fetch(`${API_BASE}/api/extract/`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -459,7 +459,7 @@
         // Evaluation functions
         async function loadEvaluationResults() {
             try {
-                const response = await fetch(`${API_BASE}/api/evaluation/results`);
+                const response = await fetch(`${API_BASE}/api/evaluation/results/`);
                 const data = await response.json();
                 displayEvaluationResults(data);
             } catch (error) {
@@ -562,7 +562,7 @@
 
         async function runTests() {
             try {
-                const response = await fetch(`${API_BASE}/api/evaluation/run`, {
+                const response = await fetch(`${API_BASE}/api/evaluation/run/`, {
                     method: 'POST'
                 });
                 await loadEvaluationResults();
