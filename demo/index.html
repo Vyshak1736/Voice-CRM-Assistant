@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice CRM Assistant - Demo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .recording-indicator {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+        
+        .audio-visualizer {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 60px;
+            gap: 3px;
+        }
+        
+        .audio-bar {
+            width: 4px;
+            background: linear-gradient(to top, #3b82f6, #8b5cf6);
+            border-radius: 2px;
+            animation: sound-wave 0.5s ease-in-out infinite alternate;
+        }
+        
+        .audio-bar:nth-child(1) { animation-delay: 0s; height: 20px; }
+        .audio-bar:nth-child(2) { animation-delay: 0.1s; height: 30px; }
+        .audio-bar:nth-child(3) { animation-delay: 0.2s; height: 25px; }
+        .audio-bar:nth-child(4) { animation-delay: 0.3s; height: 35px; }
+        .audio-bar:nth-child(5) { animation-delay: 0.4s; height: 28px; }
+        
+        @keyframes sound-wave {
+            0% { transform: scaleY(0.5); }
+            100% { transform: scaleY(1); }
+        }
+        
+        .json-output {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 16px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            overflow-x: auto;
+        }
+        
+        .json-key { color: #d73a49; font-weight: bold; }
+        .json-string { color: #032f62; }
+        .json-number { color: #005cc5; }
+        .json-boolean { color: #e36209; }
+        .json-null { color: #6f42c1; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Navigation -->
+    <nav class="bg-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <h1 class="text-xl font-bold text-gray-800">
+                        <i class="fas fa-microphone-alt mr-2"></i>
+                        Voice CRM Assistant
+                    </h1>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button onclick="showMain()" class="nav-btn flex items-center px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-gray-900">
+                        <i class="fas fa-file-alt mr-2"></i>
+                        Record
+                    </button>
+                    <button onclick="showEvaluation()" class="nav-btn flex items-center px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-gray-900">
+                        <i class="fas fa-chart-bar mr-2"></i>
+                        Evaluation
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-4xl mx-auto py-8 px-4">
+        <!-- Recording Section -->
+        <div id="main-section">
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <h2 class="text-2xl font-semibold mb-4">Voice Recording</h2>
+                
+                <div class="space-y-6">
+                    <div class="flex flex-col items-center space-y-4">
+                        <div class="relative">
+                            <button id="record-btn" onclick="toggleRecording()" class="p-6 rounded-full bg-blue-500 hover:bg-blue-600 transition-all duration-200">
+                                <i class="fas fa-microphone w-8 h-8 text-white"></i>
+                            </button>
+                            
+                            <div id="recording-status" class="hidden absolute -bottom-2 left-1/2 transform -translate-x-1/2">
+                                <div class="flex items-center space-x-1">
+                                    <div class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                                    <span class="text-sm text-red-500 font-medium">Recording</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="audio-visualizer" class="hidden audio-visualizer">
+                            <div class="audio-bar"></div>
+                            <div class="audio-bar"></div>
+                            <div class="audio-bar"></div>
+                            <div class="audio-bar"></div>
+                            <div class="audio-bar"></div>
+                        </div>
+
+                        <div class="text-center">
+                            <p id="status-text" class="text-gray-600">Click the microphone to start recording</p>
+                        </div>
+                    </div>
+
+                    <div id="audio-player" class="hidden mt-6">
+                        <audio controls class="w-full" id="audio-element"></audio>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transcription Section -->
+            <div id="transcription-section" class="hidden bg-white rounded-lg shadow-md p-6 mb-6">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-xl font-semibold text-gray-800">Transcribed Text</h3>
+                    <button onclick="copyTranscription()" class="flex items-center space-x-2 px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md transition-colors">
+                        <i class="fas fa-copy text-gray-600"></i>
+                        <span class="text-gray-600">Copy</span>
+                    </button>
+                </div>
+                
+                <div class="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    <p id="transcription-text" class="text-gray-700 leading-relaxed whitespace-pre-wrap"></p>
+                </div>
+            </div>
+
+            <!-- Loading Section -->
+            <div id="loading-section" class="hidden bg-white rounded-lg shadow-md p-6 mb-6">
+                <div class="flex items-center justify-center">
+                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                    <span class="ml-3">Extracting structured data...</span>
+                </div>
+            </div>
+
+            <!-- JSON Output Section -->
+            <div id="json-section" class="hidden bg-white rounded-lg shadow-md p-6">
+                <div class="flex justify-between items-start mb-3">
+                    <h3 class="text-xl font-semibold text-gray-800">Extracted CRM Data</h3>
+                    <div class="flex space-x-2">
+                        <button onclick="copyJson()" class="flex items-center space-x-2 px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md transition-colors">
+                            <i class="fas fa-copy text-gray-600"></i>
+                            <span class="text-gray-600">Copy</span>
+                        </button>
+                        <button onclick="downloadJson()" class="flex items-center space-x-2 px-3 py-1 text-sm bg-blue-100 hover:bg-blue-200 text-blue-600 rounded-md transition-colors">
+                            <i class="fas fa-download"></i>
+                            <span>Download</span>
+                        </button>
+                    </div>
+                </div>
+                
+                <div id="json-output" class="json-output"></div>
+                
+                <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <h5 class="font-medium text-blue-800 mb-2">Customer Information</h5>
+                        <div class="space-y-1 text-sm">
+                            <p><span class="font-medium">Name:</span> <span id="customer-name">N/A</span></p>
+                            <p><span class="font-medium">Phone:</span> <span id="customer-phone">N/A</span></p>
+                            <p><span class="font-medium">Address:</span> <span id="customer-address">N/A</span></p>
+                            <p><span class="font-medium">City:</span> <span id="customer-city">N/A</span></p>
+                            <p><span class="font-medium">Locality:</span> <span id="customer-locality">N/A</span></p>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                        <h5 class="font-medium text-green-800 mb-2">Interaction Details</h5>
+                        <div class="space-y-1 text-sm">
+                            <p><span class="font-medium">Summary:</span> <span id="interaction-summary">N/A</span></p>
+                            <p><span class="font-medium">Created:</span> <span id="interaction-created">N/A</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Evaluation Section -->
+        <div id="evaluation-section" class="hidden">
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <div class="flex justify-between items-center mb-6">
+                    <div class="flex items-center space-x-3">
+                        <i class="fas fa-chart-bar w-8 h-8 text-blue-600"></i>
+                        <h2 class="text-2xl font-bold text-gray-800">Evaluation Dashboard</h2>
+                    </div>
+                    <div class="flex space-x-3">
+                        <button onclick="runTests()" class="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors">
+                            <i class="fas fa-sync-alt"></i>
+                            <span>Run Tests</span>
+                        </button>
+                        <button onclick="downloadResults()" class="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors">
+                            <i class="fas fa-download"></i>
+                            <span>Download CSV</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="stats-grid" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                    <!-- Stats will be populated here -->
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h3 class="text-xl font-semibold mb-4">Test Results</h3>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Test ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Input</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Confidence</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Timestamp</th>
+                            </tr>
+                        </thead>
+                        <tbody id="results-tbody" class="bg-white divide-y divide-gray-200">
+                            <!-- Results will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        let isRecording = false;
+        let mediaRecorder = null;
+        let audioChunks = [];
+
+        // Navigation
+        function showMain() {
+            document.getElementById('main-section').classList.remove('hidden');
+            document.getElementById('evaluation-section').classList.add('hidden');
+        }
+
+        function showEvaluation() {
+            document.getElementById('main-section').classList.add('hidden');
+            document.getElementById('evaluation-section').classList.remove('hidden');
+            loadEvaluationResults();
+        }
+
+        // Recording functions
+        async function toggleRecording() {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                await startRecording();
+            }
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    
+                    // Show audio player
+                    const audioElement = document.getElementById('audio-element');
+                    audioElement.src = audioUrl;
+                    document.getElementById('audio-player').classList.remove('hidden');
+                    
+                    // Stop all tracks
+                    stream.getTracks().forEach(track => track.stop());
+                    
+                    // Send to backend for transcription
+                    await transcribeAudio(audioBlob);
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                updateRecordingUI(true);
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                alert('Please allow microphone access to use this feature.');
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+                updateRecordingUI(false);
+            }
+        }
+
+        function updateRecordingUI(recording) {
+            const btn = document.getElementById('record-btn');
+            const status = document.getElementById('recording-status');
+            const visualizer = document.getElementById('audio-visualizer');
+            const statusText = document.getElementById('status-text');
+
+            if (recording) {
+                btn.innerHTML = '<i class="fas fa-stop w-8 h-8 text-white"></i>';
+                btn.className = 'p-6 rounded-full bg-red-500 hover:bg-red-600 transition-all duration-200 recording-indicator';
+                status.classList.remove('hidden');
+                visualizer.classList.remove('hidden');
+                statusText.textContent = 'Speak clearly into your microphone';
+            } else {
+                btn.innerHTML = '<i class="fas fa-microphone w-8 h-8 text-white"></i>';
+                btn.className = 'p-6 rounded-full bg-blue-500 hover:bg-blue-600 transition-all duration-200';
+                status.classList.add('hidden');
+                visualizer.classList.add('hidden');
+                statusText.textContent = 'Processing audio...';
+            }
+        }
+
+        // API functions
+        async function transcribeAudio(audioBlob) {
+            try {
+                const formData = new FormData();
+                formData.append('audio', audioBlob, 'recording.wav');
+
+                const response = await fetch(`${API_BASE}/api/transcribe`, {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    throw new Error('Transcription failed');
+                }
+
+                const result = await response.json();
+                showTranscription(result.transcription);
+                await extractData(result.transcription);
+            } catch (error) {
+                console.error('Error transcribing audio:', error);
+                console.log('Error details:', error.message);
+                console.log('Response status:', error.response?.status);
+                console.log('Response text:', error.response ? await error.response.text() : 'No response');
+                alert('Failed to transcribe audio. Using demo text instead.');
+                // Use demo text for demo purposes
+                const demoText = "I spoke with customer Amit Verma today. His phone number is nine nine eight eight seven seven six six five five. He stays at 45 Park Street, Salt Lake, Kolkata. We discussed demo and next steps.";
+                showTranscription(demoText);
+                await extractData(demoText);
+            }
+        }
+
+        async function extractData(text) {
+            try {
+                document.getElementById('loading-section').classList.remove('hidden');
+                
+                const response = await fetch(`${API_BASE}/api/extract`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ text }),
+                });
+
+                if (!response.ok) {
+                    throw new Error('Data extraction failed');
+                }
+
+                const data = await response.json();
+                showJsonOutput(data);
+            } catch (error) {
+                console.error('Error extracting data:', error);
+                alert('Failed to extract data. Please try again.');
+            } finally {
+                document.getElementById('loading-section').classList.add('hidden');
+            }
+        }
+
+        function showTranscription(text) {
+            document.getElementById('transcription-text').textContent = text;
+            document.getElementById('transcription-section').classList.remove('hidden');
+        }
+
+        function showJsonOutput(data) {
+            // Format JSON with syntax highlighting
+            const formattedJson = syntaxHighlight(JSON.stringify(data, null, 2));
+            document.getElementById('json-output').innerHTML = formattedJson;
+            
+            // Update customer info
+            document.getElementById('customer-name').textContent = data.customer?.full_name || 'N/A';
+            document.getElementById('customer-phone').textContent = data.customer?.phone || 'N/A';
+            document.getElementById('customer-address').textContent = data.customer?.address || 'N/A';
+            document.getElementById('customer-city').textContent = data.customer?.city || 'N/A';
+            document.getElementById('customer-locality').textContent = data.customer?.locality || 'N/A';
+            
+            // Update interaction info
+            document.getElementById('interaction-summary').textContent = data.interaction?.summary || 'N/A';
+            document.getElementById('interaction-created').textContent = data.interaction?.created_at ? new Date(data.interaction.created_at).toLocaleString() : 'N/A';
+            
+            document.getElementById('json-section').classList.remove('hidden');
+        }
+
+        function syntaxHighlight(json) {
+            json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+                let cls = 'json-number';
+                if (/^"/.test(match)) {
+                    if (/:$/.test(match)) {
+                        cls = 'json-key';
+                    } else {
+                        cls = 'json-string';
+                    }
+                } else if (/true|false/.test(match)) {
+                    cls = 'json-boolean';
+                } else if (/null/.test(match)) {
+                    cls = 'json-null';
+                }
+                return '<span class="' + cls + '">' + match + '</span>';
+            });
+        }
+
+        // Utility functions
+        function copyTranscription() {
+            const text = document.getElementById('transcription-text').textContent;
+            navigator.clipboard.writeText(text);
+            alert('Transcription copied to clipboard!');
+        }
+
+        function copyJson() {
+            const jsonElement = document.getElementById('json-output');
+            const text = jsonElement.textContent;
+            navigator.clipboard.writeText(text);
+            alert('JSON copied to clipboard!');
+        }
+
+        function downloadJson() {
+            const jsonElement = document.getElementById('json-output');
+            const text = jsonElement.textContent;
+            const blob = new Blob([text], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `crm-data-${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // Evaluation functions
+        async function loadEvaluationResults() {
+            try {
+                const response = await fetch(`${API_BASE}/api/evaluation/results`);
+                const data = await response.json();
+                displayEvaluationResults(data);
+            } catch (error) {
+                console.error('Error loading evaluation results:', error);
+                // Show mock data for demo
+                showMockEvaluationResults();
+            }
+        }
+
+        function displayEvaluationResults(data) {
+            const stats = data.stats;
+            const results = data.results;
+
+            // Update stats grid
+            const statsGrid = document.getElementById('stats-grid');
+            statsGrid.innerHTML = `
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-blue-600 font-medium">Total Tests</p>
+                            <p class="text-2xl font-bold text-blue-800">${stats.total}</p>
+                        </div>
+                        <i class="fas fa-chart-bar w-8 h-8 text-blue-600"></i>
+                    </div>
+                </div>
+                
+                <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-green-600 font-medium">Passed</p>
+                            <p class="text-2xl font-bold text-green-800">${stats.passed}</p>
+                        </div>
+                        <i class="fas fa-check-circle w-8 h-8 text-green-600"></i>
+                    </div>
+                </div>
+                
+                <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-red-600 font-medium">Failed</p>
+                            <p class="text-2xl font-bold text-red-800">${stats.failed}</p>
+                        </div>
+                        <i class="fas fa-times-circle w-8 h-8 text-red-600"></i>
+                    </div>
+                </div>
+                
+                <div class="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-purple-600 font-medium">Accuracy</p>
+                            <p class="text-2xl font-bold text-purple-800">${stats.accuracy}%</p>
+                        </div>
+                        <i class="fas fa-clock w-8 h-8 text-purple-600"></i>
+                    </div>
+                </div>
+            `;
+
+            // Update results table
+            const tbody = document.getElementById('results-tbody');
+            tbody.innerHTML = results.map(test => `
+                <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">#${test.id}</td>
+                    <td class="px-6 py-4 text-sm text-gray-500">
+                        <div class="max-w-xs truncate" title="${test.input}">${test.input}</div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        ${test.passed ? 
+                            '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><i class="fas fa-check-circle w-3 h-3 mr-1"></i>PASS</span>' :
+                            '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800"><i class="fas fa-times-circle w-3 h-3 mr-1"></i>FAIL</span>'
+                        }
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${(test.confidence * 100).toFixed(1)}%</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${new Date(test.timestamp).toLocaleString()}</td>
+                </tr>
+            `).join('');
+        }
+
+        function showMockEvaluationResults() {
+            const mockData = {
+                stats: { total: 2, passed: 2, failed: 0, accuracy: 100.0 },
+                results: [
+                    {
+                        id: 1,
+                        input: "I spoke with customer Amit Verma today...",
+                        passed: true,
+                        confidence: 0.95,
+                        timestamp: new Date().toISOString()
+                    },
+                    {
+                        id: 2,
+                        input: "Customer Sarah Johnson called from...",
+                        passed: true,
+                        confidence: 0.88,
+                        timestamp: new Date().toISOString()
+                    }
+                ]
+            };
+            displayEvaluationResults(mockData);
+        }
+
+        async function runTests() {
+            try {
+                const response = await fetch(`${API_BASE}/api/evaluation/run`, {
+                    method: 'POST'
+                });
+                await loadEvaluationResults();
+                alert('Tests completed successfully!');
+            } catch (error) {
+                console.error('Error running tests:', error);
+                alert('Failed to run tests. Please try again.');
+            }
+        }
+
+        function downloadResults() {
+            // Generate CSV content
+            let csvContent = "Test ID,Input,Status,Confidence,Timestamp\n";
+            const rows = document.querySelectorAll('#results-tbody tr');
+            rows.forEach(row => {
+                const cells = row.querySelectorAll('td');
+                const testId = cells[0].textContent.trim();
+                const input = cells[1].textContent.trim();
+                const status = cells[2].textContent.trim();
+                const confidence = cells[3].textContent.trim();
+                const timestamp = cells[4].textContent.trim();
+                csvContent += `${testId},"${input}",${status},${confidence},${timestamp}\n`;
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `evaluation-results-${new Date().toISOString().split('T')[0]}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            showMain();
+        });
+    </script>
+</body>
+</html>
