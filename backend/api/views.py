@@ -3,11 +3,19 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.utils import timezone
+from django.http import HttpResponse
 from .models import Customer, Interaction, TestResult
 from .serializers import CustomerSerializer, InteractionSerializer, TestResultSerializer
+from .utils import DataExtractor, EvaluationManager
 import re
 import json
+import os
+import tempfile
+import whisper
 from datetime import datetime
+import pydub
+from pydub import AudioSegment
+import pandas as pd
 
 
 class HealthView(APIView):
@@ -22,126 +30,134 @@ class HealthView(APIView):
 
 
 class TranscriptionView(APIView):
-    """Transcribe audio to text endpoint"""
+    """
+    Transcribe audio to text using OpenAI Whisper
+    """
     parser_classes = [MultiPartParser, FormParser]
-    
+
     def post(self, request):
+        audio_file = request.FILES.get("audio")
+
+        if not audio_file:
+            return Response(
+                {"error": "Audio file is required. Use form-data with key 'audio'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        temp_path = None
+
         try:
-            audio_file = request.FILES.get('audio')
-            if not audio_file:
+            # Determine file extension
+            original_name = audio_file.name.lower()
+            if original_name.endswith((".webm", ".weba")):
+                suffix = ".webm"
+            elif original_name.endswith(".wav"):
+                suffix = ".wav"
+            elif original_name.endswith(".mp3"):
+                suffix = ".mp3"
+            elif original_name.endswith(".m4a"):
+                suffix = ".m4a"
+            else:
                 return Response(
-                    {"error": "No audio file provided"}, 
+                    {"error": "Unsupported audio format"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+
+            # Save uploaded file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+                for chunk in audio_file.chunks():
+                    temp_file.write(chunk)
+                temp_file.flush()  # Ensure data is written to disk
+                temp_path = temp_file.name
+
+            # Validate saved file
+            if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
+                return Response(
+                    {"error": "Uploaded file is empty or invalid"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            print(f"Processing audio file: {temp_path}")
+            print(f"File size: {os.path.getsize(temp_path)} bytes")
             
-            # Use real speech-to-text transcription
+            # Wait a moment for file system to sync
+            import time
+            time.sleep(0.1)
+            
+            model = whisper.load_model("base")
+
+            # Try direct transcription first (Whisper handles most formats)
             try:
-                import whisper
-                import tempfile
-                import os
-                import speech_recognition as sr
-                import wave
-                import audioop
-                from pydub import AudioSegment
+                print(f"Attempting direct transcription of {temp_path}")
+                result = model.transcribe(
+                    temp_path,
+                    language="en",
+                    fp16=False
+                )
+                print("Transcription successful!")
+                    
+            except Exception as whisper_error:
+                print(f"Whisper transcription failed: {whisper_error}")
+                import traceback
+                traceback.print_exc()
                 
-                # Save uploaded audio to temporary file
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
-                    for chunk in audio_file.chunks():
-                        temp_file.write(chunk)
-                    temp_file_path = temp_file.name
+                # Check if it's an FFmpeg issue
+                error_str = str(whisper_error).lower()
+                ffmpeg_keywords = ['ffmpeg', 'pydub.exceptions.AudioProcessingException', 'failed to load audio', 'ffmpeg not found']
+                if any(keyword in error_str for keyword in ffmpeg_keywords):
+                    print(f"FFmpeg-related error detected: {whisper_error}")
+                    return Response(
+                        {
+                            "error": "Audio processing failed - FFmpeg not installed",
+                            "details": "Please install FFmpeg. See AUDIO_PROCESSING_FIX.md for instructions.",
+                            "help": "Windows: choco install ffmpeg | Mac: brew install ffmpeg | Linux: sudo apt-get install ffmpeg"
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
                 
-                try:
-                    # Try to convert audio to WAV format first
-                    try:
-                        # Convert webm to wav using pydub
-                        audio = AudioSegment.from_file(temp_file_path)
-                        wav_path = temp_file_path.replace('.webm', '.wav')
-                        audio.export(wav_path, format='wav')
-                        os.unlink(temp_file_path)
-                        temp_file_path = wav_path
-                        print(f"Converted audio to WAV format")
-                    except Exception as conversion_error:
-                        print(f"Audio conversion failed: {conversion_error}")
-                        # Continue with original file
-                    
-                    # Try Whisper first (most accurate)
-                    print(f"Attempting Whisper transcription for {audio_file.name}")
-                    model = whisper.load_model("base")
-                    result = model.transcribe(temp_file_path)
-                    transcription = result["text"]
-                    
-                    # Clean up temporary file
-                    os.unlink(temp_file_path)
-                    
-                    print(f"Whisper transcription successful: {transcription[:50]}...")
-                    return Response({"transcription": transcription})
-                    
-                except Exception as whisper_error:
-                    print(f"Whisper transcription failed: {whisper_error}")
-                    
-                    # Fallback to SpeechRecognition
-                    try:
-                        print(f"Attempting SpeechRecognition fallback")
-                        r = sr.Recognizer()
-                        
-                        # Try different audio formats
-                        audio_formats = ['.wav', '.mp3', '.webm', '.ogg', '.flac']
-                        success = False
-                        
-                        for fmt in audio_formats:
-                            try:
-                                # Check if file exists with this extension
-                                test_path = temp_file_path.rsplit('.', 1)[0] + fmt
-                                if os.path.exists(test_path):
-                                    temp_file_path = test_path
-                                
-                                with sr.AudioFile(temp_file_path) as source:
-                                    audio = r.record(source)
-                                
-                                # Try Google Speech Recognition (free)
-                                transcription = r.recognize_google(audio)
-                                success = True
-                                break
-                                
-                            except Exception as format_error:
-                                print(f"Format {fmt} failed: {format_error}")
-                                continue
-                        
-                        if success:
-                            # Clean up temporary file
-                            os.unlink(temp_file_path)
-                            print(f"SpeechRecognition successful: {transcription[:50]}...")
-                            return Response({"transcription": transcription})
-                        else:
-                            raise Exception("All audio formats failed")
-                        
-                    except Exception as sr_error:
-                        print(f"SpeechRecognition failed: {sr_error}")
-                        
-                        # Clean up temporary file
-                        if os.path.exists(temp_file_path):
-                            os.unlink(temp_file_path)
-                        
-                        # Final fallback to mock
-                        print("Using mock transcription as final fallback")
-                        mock_transcription = "I spoke with customer Amit Verma today. His phone number is nine nine eight eight seven seven six six five five. He stays at 45 Park Street, Salt Lake, Kolkata. We discussed demo and next steps."
-                        return Response({"transcription": mock_transcription})
-                    
-            except ImportError as import_error:
-                print(f"Speech-to-text libraries not available: {import_error}")
-                mock_transcription = "I spoke with customer Amit Verma today. His phone number is nine nine eight eight seven seven six six five five. He stays at 45 Park Street, Salt Lake, Kolkata. We discussed demo and next steps."
-                return Response({"transcription": mock_transcription})
-            
+                return Response(
+                    {
+                        "error": "Audio processing failed", 
+                        "details": str(whisper_error)
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+            transcription = result.get("text", "").strip()
+
+            if not transcription:
+                print("No speech detected in audio - transcription result is empty")
+                return Response(
+                    {"error": "No speech detected in audio", "details": "Please speak clearly and record for at least 2-3 seconds"},
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY
+                )
+
+            return Response(
+                {"transcription": transcription},
+                status=status.HTTP_200_OK
+            )
+
         except Exception as e:
             return Response(
-                {"error": str(e)}, 
+                {
+                    "error": "Transcription failed",
+                    "details": str(e)
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+        finally:
+            # Cleanup temp file
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
 
 
 class ExtractionView(APIView):
     """Extract structured data from text endpoint"""
     parser_classes = [JSONParser]
+    
+    def __init__(self):
+        self.extractor = DataExtractor()
     
     def post(self, request):
         try:
@@ -152,11 +168,11 @@ class ExtractionView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Extract customer data
-            extracted_data = self.extract_customer_data(text)
+            # Extract customer data using enhanced extractor
+            extracted_data = self.extractor.extract_customer_data(text)
             
             # Save to database
-            customer_data = extracted_data['customer']
+            customer_data = {k: v for k, v in extracted_data['customer'].items() if v}
             customer = Customer.objects.create(**customer_data)
             
             interaction_data = extracted_data['interaction']
@@ -172,7 +188,8 @@ class ExtractionView(APIView):
                 "interaction": {
                     "summary": interaction.summary,
                     "created_at": interaction.created_at.isoformat()
-                }
+                },
+                "confidence_scores": extracted_data.get('confidence_scores', {})
             }
             
             return Response(response_data)
@@ -352,83 +369,100 @@ class EvaluationResultsView(APIView):
             )
 
 
-class EvaluationRunView(APIView):
-    """Run evaluation tests endpoint"""
+class DebugAudioView(APIView):
+    """Debug endpoint for audio processing testing"""
+    parser_classes = [MultiPartParser, FormParser]
     
     def post(self, request):
         try:
-            # Mock test cases (same as FastAPI version)
-            test_cases = [
-                {
-                    "id": 1,
-                    "input": "I spoke with customer Amit Verma today. His phone number is nine nine eight eight seven seven six six five five. He stays at 45 Park Street, Salt Lake, Kolkata. We discussed demo and next steps.",
-                    "expected": {
-                        "customer": {
-                            "full_name": "Amit Verma",
-                            "phone": "9988776655",
-                            "city": "Kolkata",
-                            "locality": "Salt Lake"
-                        },
-                        "interaction": {
-                            "summary": "discussed demo and next steps"
-                        }
-                    }
-                },
-                {
-                    "id": 2,
-                    "input": "Customer Sarah Johnson called from 9876543210. She lives at 123 Main Road, Bandra, Mumbai. We talked about pricing options for the premium package.",
-                    "expected": {
-                        "customer": {
-                            "full_name": "Sarah Johnson",
-                            "phone": "9876543210",
-                            "city": "Mumbai",
-                            "locality": "Bandra"
-                        },
-                        "interaction": {
-                            "summary": "talked about pricing options for the premium package"
-                        }
-                    }
-                }
-            ]
-            
-            results = []
-            passed_count = 0
-            
-            for test_case in test_cases:
-                # Extract data using the same logic
-                extracted = self.extract_customer_data(test_case["input"])
-                
-                # Compare with expected
-                passed = self.compare_results(extracted, test_case["expected"])
-                confidence = self.calculate_confidence(extracted, test_case["expected"])
-                
-                if passed:
-                    passed_count += 1
-                
-                # Save to database
-                test_result = TestResult.objects.create(
-                    test_id=test_case["id"],
-                    input_text=test_case["input"],
-                    expected_output=test_case["expected"],
-                    actual_output=extracted,
-                    passed=passed,
-                    confidence=confidence
+            audio_file = request.FILES.get('audio')
+            if not audio_file:
+                return Response(
+                    {"error": "No audio file provided"}, 
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-                
-                results.append({
-                    "id": test_case["id"],
-                    "input": test_case["input"][:50] + "...",
-                    "passed": passed,
-                    "confidence": confidence,
-                    "timestamp": test_result.timestamp.isoformat()
-                })
             
-            accuracy = (passed_count / len(test_cases)) * 100
+            
+            
+            debug_info = {
+                "file_info": {
+                    "name": audio_file.name,
+                    "size": audio_file.size,
+                    "content_type": audio_file.content_type
+                },
+                "processing_steps": []
+            }
+            
+            # Save to temp file
+            suffix = '.webm' if audio_file.name.lower().endswith('.webm') or audio_file.name.lower().endswith('.weba') else '.wav'
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+                for chunk in audio_file.chunks():
+                    temp_file.write(chunk)
+                temp_file_path = temp_file.name
+            
+            debug_info["processing_steps"].append(f"Saved to: {temp_file_path}")
+            
+            # Check file exists
+            if os.path.exists(temp_file_path):
+                debug_info["processing_steps"].append(f"✅ File exists, size: {os.path.getsize(temp_file_path)} bytes")
+            else:
+                debug_info["processing_steps"].append("❌ File not found")
+                return Response(debug_info)
+            
+            # Try to load with pydub
+            try:
+                audio = AudioSegment.from_file(temp_file_path)
+                debug_info["processing_steps"].append(f"✅ Loaded with pydub")
+                debug_info["audio_info"] = {
+                    "duration_seconds": len(audio) / 1000.0,
+                    "channels": audio.channels,
+                    "frame_rate": audio.frame_rate,
+                    "sample_width": audio.sample_width
+                }
+                
+                # Try conversion
+                wav_path = temp_file_path.rsplit('.', 1)[0] + '.wav'
+                audio = audio.set_channels(1)
+                audio = audio.set_frame_rate(16000)
+                audio.export(wav_path, format='wav', parameters=['-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1'])
+                
+                if os.path.exists(wav_path):
+                    debug_info["processing_steps"].append(f"✅ Converted to WAV: {os.path.getsize(wav_path)} bytes")
+                    os.unlink(wav_path)
+                else:
+                    debug_info["processing_steps"].append("❌ WAV conversion failed")
+                    
+            except Exception as e:
+                debug_info["processing_steps"].append(f"❌ Pydub error: {str(e)}")
+            
+            # Clean up
+            if os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
+            
+            return Response(debug_info)
+            
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class EvaluationRunView(APIView):
+    """Run evaluation tests endpoint"""
+    
+    def __init__(self):
+        self.evaluation_manager = EvaluationManager()
+    
+    def post(self, request):
+        try:
+            # Run comprehensive evaluation
+            evaluation_results = self.evaluation_manager.run_evaluation()
             
             return Response({
-                "message": f"Evaluation completed. {passed_count}/{len(test_cases)} tests passed.",
-                "accuracy": accuracy,
-                "results": results
+                "message": f"Evaluation completed. {evaluation_results['passed_tests']}/{evaluation_results['total_tests']} tests passed.",
+                "accuracy": evaluation_results['accuracy'],
+                "total_tests": evaluation_results['total_tests'],
+                "passed_tests": evaluation_results['passed_tests'],
+                "failed_tests": evaluation_results['failed_tests'],
+                "results": evaluation_results['results']
             })
             
         except Exception as e:
@@ -437,56 +471,22 @@ class EvaluationRunView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
-    def extract_customer_data(self, text):
-        """Same extraction logic as ExtractionView"""
-        # Create instance of ExtractionView to reuse logic
-        extraction_view = ExtractionView()
-        return extraction_view.extract_customer_data(text)
-    
-    def compare_results(self, actual, expected):
-        """Compare actual and expected results"""
+    def get(self, request):
+        """Export evaluation results to Excel"""
         try:
-            # Compare customer data
-            customer_match = True
-            for key in ["full_name", "phone", "city", "locality"]:
-                actual_val = actual.get("customer", {}).get(key, "").lower()
-                expected_val = expected.get("customer", {}).get(key, "").lower()
-                if actual_val != expected_val and expected_val:  # Expected value is not empty
-                    customer_match = False
-                    break
-            
-            # Compare interaction summary
-            actual_summary = actual.get("interaction", {}).get("summary", "").lower()
-            expected_summary = expected.get("interaction", {}).get("summary", "").lower()
-            summary_match = actual_summary == expected_summary or expected_summary in actual_summary
-            
-            return customer_match and summary_match
-            
-        except Exception:
-            return False
-    
-    def calculate_confidence(self, actual, expected):
-        """Calculate confidence score"""
-        try:
-            matches = 0
-            total = 0
-            
-            # Check customer fields
-            for key in ["full_name", "phone", "city", "locality"]:
-                total += 1
-                actual_val = actual.get("customer", {}).get(key, "").lower()
-                expected_val = expected.get("customer", {}).get(key, "").lower()
-                if actual_val == expected_val or (not expected_val and not actual_val):
-                    matches += 1
-            
-            # Check summary
-            total += 1
-            actual_summary = actual.get("interaction", {}).get("summary", "").lower()
-            expected_summary = expected.get("interaction", {}).get("summary", "").lower()
-            if actual_summary == expected_summary or expected_summary in actual_summary:
-                matches += 1
-            
-            return matches / total if total > 0 else 0.0
-            
-        except Exception:
-            return 0.0
+            filename = self.evaluation_manager.export_to_excel()
+            if filename:
+                return Response({
+                    "message": "Evaluation results exported successfully",
+                    "filename": filename
+                })
+            else:
+                return Response(
+                    {"error": "Failed to export results"}, 
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        except Exception as e:
+            return Response(
+                {"error": str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

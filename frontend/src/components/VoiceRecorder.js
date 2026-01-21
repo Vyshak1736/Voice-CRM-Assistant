@@ -1,69 +1,142 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Square } from 'lucide-react';
+import { Mic, MicOff, Square, AlertCircle } from 'lucide-react';
 
 const VoiceRecorder = ({ isRecording, setIsRecording, onTranscriptionComplete }) => {
   const [audioURL, setAudioURL] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState('');
+  const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const streamRef = useRef(null);
+  const timerRef = useRef(null);
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorderRef.current = new MediaRecorder(stream);
+      setError(''); // Clear any previous errors
+      setRecordingTime(0);
+      
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: true
+      });
+      
+      streamRef.current = stream;
+      
+      // Try to use webm with opus codec, fallback to default webm (like demo)
+      let selectedMimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(selectedMimeType)) {
+        selectedMimeType = 'audio/webm';
+      }
+      if (!MediaRecorder.isTypeSupported(selectedMimeType)) {
+        selectedMimeType = 'audio/ogg';
+      }
+      
+      console.log('Using MIME type:', selectedMimeType);
+      
+      mediaRecorderRef.current = new MediaRecorder(stream, {
+        mimeType: selectedMimeType
+      });
       audioChunksRef.current = [];
 
       mediaRecorderRef.current.ondataavailable = (event) => {
+        console.log('Audio chunk available, size:', event.data.size, 'type:', event.data.type);
         audioChunksRef.current.push(event.data);
       };
 
       mediaRecorderRef.current.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        const audioUrl = URL.createObjectURL(audioBlob);
-        setAudioURL(audioUrl);
-        
-        // Stop all tracks
-        stream.getTracks().forEach(track => track.stop());
-        
-        // Send to backend for transcription
-        await transcribeAudio(audioBlob);
+        try {
+          console.log('Recording stopped, processing audio...');
+          console.log('Audio chunks collected:', audioChunksRef.current.length);
+          
+          // Create blob exactly like demo
+          const audioBlob = new Blob(audioChunksRef.current, { 
+            type: selectedMimeType 
+          });
+          
+          console.log('Audio blob created:', audioBlob);
+          console.log('Blob size:', audioBlob.size, 'bytes');
+          console.log('Blob type:', audioBlob.type);
+          
+          const audioUrl = URL.createObjectURL(audioBlob);
+          setAudioURL(audioUrl);
+          
+          // Stop all tracks (like demo)
+          stream.getTracks().forEach(track => track.stop());
+          
+          // Send to backend for transcription (like demo)
+          await transcribeAudio(audioBlob);
+          
+        } catch (error) {
+          console.error('Error processing audio:', error);
+          setError('Failed to process audio recording');
+          setIsProcessing(false);
+        }
       };
 
       mediaRecorderRef.current.start();
       setIsRecording(true);
+      console.log('MediaRecorder started');
+      
+      // Start timer
+      timerRef.current = setInterval(() => {
+        setRecordingTime(prev => prev + 1);
+      }, 1000);
+      
     } catch (error) {
       console.error('Error accessing microphone:', error);
-      alert('Please allow microphone access to use this feature.');
+      setError('Please allow microphone access to use this feature.');
     }
   };
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
+      console.log('Stopping MediaRecorder');
       mediaRecorderRef.current.stop();
       setIsRecording(false);
       setIsProcessing(true);
+      
+      // Clear timer
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
     }
   };
 
   const transcribeAudio = async (audioBlob) => {
     try {
+      console.log('Starting transcription...');
+      setError(''); // Clear any previous errors
+      
       const formData = new FormData();
-      formData.append('audio', audioBlob, 'recording.wav');
-
-      const response = await fetch('http://localhost:8000/api/transcribe', {
+      
+      formData.append('audio', audioBlob, 'recording.webm');
+      
+      const url = 'http://127.0.0.1:8000/api/transcribe/';
+      console.log('=== Calling transcription URL:', url);
+      console.log('Blob type:', audioBlob.type);
+      console.log('Blob size:', audioBlob.size);
+      
+      let response = await fetch(url, {
         method: 'POST',
         body: formData,
       });
 
+      console.log('Response status:', response.status);
+      console.log('Response URL:', response.url);
+
       if (!response.ok) {
-        throw new Error('Transcription failed');
+        const errorText = await response.text();
+        console.error('Response error text:', errorText);
+        throw new Error(`Transcription failed: ${response.status} ${errorText}`);
       }
 
       const result = await response.json();
+      console.log('Transcription result:', result);
       onTranscriptionComplete(result.transcription);
+      
     } catch (error) {
       console.error('Error transcribing audio:', error);
-      alert('Failed to transcribe audio. Please try again.');
+      setError(`Failed to transcribe audio: ${error.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -74,8 +147,20 @@ const VoiceRecorder = ({ isRecording, setIsRecording, onTranscriptionComplete })
       if (mediaRecorderRef.current && isRecording) {
         mediaRecorderRef.current.stop();
       }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
     };
   }, [isRecording]);
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
 
   return (
     <div className="space-y-6">
@@ -101,7 +186,7 @@ const VoiceRecorder = ({ isRecording, setIsRecording, onTranscriptionComplete })
             <div className="absolute -bottom-2 left-1/2 transform -translate-x-1/2">
               <div className="flex items-center space-x-1">
                 <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                <span className="text-sm text-red-500 font-medium">Recording</span>
+                <span className="text-sm text-red-500 font-medium">Recording {formatTime(recordingTime)}</span>
               </div>
             </div>
           )}
@@ -109,11 +194,16 @@ const VoiceRecorder = ({ isRecording, setIsRecording, onTranscriptionComplete })
 
         {isRecording && (
           <div className="audio-visualizer">
-            <div className="audio-bar"></div>
-            <div className="audio-bar"></div>
-            <div className="audio-bar"></div>
-            <div className="audio-bar"></div>
-            <div className="audio-bar"></div>
+            {[...Array(5)].map((_, i) => (
+              <div 
+                key={i} 
+                className="audio-bar"
+                style={{
+                  animationDelay: `${i * 0.1}s`,
+                  height: `${20 + Math.random() * 30}px`
+                }}
+              ></div>
+            ))}
           </div>
         )}
 
@@ -124,6 +214,13 @@ const VoiceRecorder = ({ isRecording, setIsRecording, onTranscriptionComplete })
              'Click the microphone to start recording'}
           </p>
         </div>
+
+        {error && (
+          <div className="flex items-center space-x-2 text-red-500 bg-red-50 p-3 rounded-lg">
+            <AlertCircle className="w-4 h-4" />
+            <span className="text-sm">{error}</span>
+          </div>
+        )}
       </div>
 
       {audioURL && !isRecording && (
